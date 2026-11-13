@@ -1,48 +1,38 @@
-def test_upload_csv(client, sample_csv_bytes):
+def test_upload_movies(client, sample_csv_bytes):
     response = client.post(
         "/upload",
-        files={"file": ("sample_data.csv", sample_csv_bytes, "text/csv")},
+        files={"file": ("sample_movies.csv", sample_csv_bytes, "text/csv")},
     )
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["rows"] == 6
-    assert body["columns"] == 2
-    assert isinstance(body["id"], int)
-    assert body["id"] > 0
-
-
-def test_process_and_retrieve(
-    client, uploaded_dataset_id, processing_body
-):
-    # Process the uploaded dataset
-    response = client.post(
-        f"/datasets/{uploaded_dataset_id}/process",
-        json=processing_body,
-    )
-
-    assert response.status_code == 200
-    report = response.json()
-    assert report["validation_rows_removed"] == 1
-    assert report["cleaning_report"]["rows_before"] == 5
-    assert report["cleaning_report"]["rows_after"] == 3
-
-    # Retrieve the processed dataset
-    response = client.get(f"/datasets/{uploaded_dataset_id}")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["total_rows"] == 3
-
-    # float() so the check works whether scores come back as 80, 80.0, or "80"
-    scores = {
-        record["student_id"]: float(record["score"])
-        for record in body["data"]
+    assert response.json() == {
+        "filename": "sample_movies.csv",
+        "rows": 20,
+        "columns": 4,
+        "column_names": ["title", "release_year", "rating", "genre"],
     }
-    assert scores == {1: 80.0, 2: 90.0, 5: 85.0}
 
 
-def test_retrieve_missing_dataset(client):
-    response = client.get("/datasets/999")
+def test_get_movies(client, uploaded_movies):
+    response = client.get("/movies", params={"limit": 2})
 
-    assert response.status_code == 404
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_rows"] == 20
+    assert body["data"] == [
+        {"id": 1, "title": "Movie A", "release_year": 2020, "rating": 8.0, "genre": "Drama"},
+        {"id": 2, "title": "Movie B", "release_year": 2021, "rating": 8.5, "genre": "Comedy"},
+    ]
+
+
+def test_search_movies(client, uploaded_movies):
+    response = client.get(
+        "/movies/search",
+        params={"columns": ["title", "rating"], "min_rating": 8.5, "limit": 2},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {"id": 4, "title": "Movie C", "rating": 9.0},
+        {"id": 2, "title": "Movie B", "rating": 8.5},
+    ]
