@@ -8,6 +8,7 @@ from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from data_pipeline import create_cleaning_report, process_data, validate_dataframe
 from src import (
     HealthResponse,
+    MovieCache,
     MovieDataResponse,
     MovieProcessingReport,
     MovieStorage,
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Movie Data API", version="1.0.0")
 app.middleware("http")(log_requests)
 storage = MovieStorage()
+cache = MovieCache()
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -69,8 +71,9 @@ async def upload_movies(file: UploadFile = File(...)):
 
     df = df[MOVIE_COLUMNS]
 
-    # 3. Replace the stored collection
+    # 3. Replace the stored collection, then clear outdated cached responses
     storage.save(df)
+    cache.invalidate()
     logger.info("Uploaded movies: filename=%s, rows=%s", filename, len(df))
     return MovieUploadInfo(
         filename=filename,
@@ -83,9 +86,19 @@ async def upload_movies(file: UploadFile = File(...)):
 @app.get("/movies", response_model=MovieDataResponse)
 def get_movies(limit: int = Query(default=100, ge=1)):
     """Return up to limit movies plus the total number stored."""
+    # 1. Return the cached response if there is one
+    cached = cache.get(limit)
+    if cached is not None:
+        logger.info("Cache hit: limit=%s", limit)
+        return cached
+
+    # Part 1's SQL retrieval and count
     data = storage.select_columns(MOVIE_COLUMNS, limit)
     total_rows = storage.count_movies()
     response = {"data": data, "total_rows": total_rows}
+
+    # 2. Cache the complete response before returning it
+    cache.set(limit, response)
     logger.info("Retrieved movies: returned_rows=%s", len(data))
     return response
 
@@ -146,8 +159,9 @@ def process_movies(config: ProcessConfig):
         logger.warning("Processing failed: %s", error)
         raise HTTPException(status_code=400, detail=str(error)) from error
 
-    # 3. Only reached if everything above worked
+    # 3. Only reached if everything above worked: save, then clear the cache
     storage.save(processed)
+    cache.invalidate()
     logger.info(
         "Processed movies: validation_removed=%s, rows_before=%s, rows_after=%s",
         validation_rows_removed,
